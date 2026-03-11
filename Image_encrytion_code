@@ -1,0 +1,88 @@
+** CODE - 
+import numpy as np
+from PIL import Image
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+from Crypto.Random import get_random_bytes
+import matplotlib.pyplot as plt
+
+def plot_histogram(channel, title):
+    plt.hist(channel.flatten(), bins=256, range=(0, 256), color='gray')
+    plt.title(title)
+    plt.xlabel('Pixel Value')
+    plt.ylabel('Frequency')
+    plt.grid(True)
+    plt.show()
+
+def calculate_entropy(channel):
+    hist, _ = np.histogram(channel.flatten(), bins=256, range=(0, 256))
+    prob = hist / np.sum(hist)
+    return -np.sum(prob * np.log2(prob + 1e-12))
+
+def calculate_mse(original, decrypted):
+    return np.mean((original.astype(np.float64) - decrypted.astype(np.float64)) ** 2)
+
+def calculate_npcr(original, encrypted):
+    return np.sum(original != encrypted) / original.size * 100
+
+def image_to_array(path):
+    img = Image.open(path).convert('RGB')
+    arr = np.array(img)
+    return arr, img.size, arr.shape
+
+def array_to_image(array, shape, path):
+    img = Image.fromarray(array.astype(np.uint8).reshape(shape))
+    img.save(path)
+
+def aes_encrypt_channel(channel, key, nonce):
+    cipher = AES.new(key, AES.MODE_CTR, nonce=nonce)
+    padded = pad(channel.tobytes(), AES.block_size)
+    encrypted = cipher.encrypt(padded)
+    return encrypted, cipher.nonce
+
+def aes_decrypt_channel(encrypted, key, nonce, shape):
+    cipher = AES.new(key, AES.MODE_CTR, nonce=nonce)
+    decrypted = cipher.decrypt(encrypted)
+    unpadded = unpad(decrypted, AES.block_size)
+    return np.frombuffer(unpadded, dtype=np.uint8).reshape(shape)
+
+def main(image_path):
+    print(f"[+] Loading RGB image: {image_path}")
+    img_array, size, shape = image_to_array(image_path)
+
+    channels = [img_array[:, :, i] for i in range(3)]
+    keys = [get_random_bytes(32) for _ in range(3)]
+    nonces = [get_random_bytes(8) for _ in range(3)]
+
+    encrypted_channels = []
+    decrypted_channels = []
+    for i in range(3):
+        print(f"[+] Encrypting channel {i}")
+        encrypted_bytes, nonce_used = aes_encrypt_channel(channels[i], keys[i], nonces[i])
+        decrypted = aes_decrypt_channel(encrypted_bytes, keys[i], nonce_used, channels[i].shape)
+
+        encrypted = np.frombuffer(encrypted_bytes, dtype=np.uint8)[:channels[i].size].reshape(channels[i].shape)
+        encrypted_channels.append(encrypted)
+        decrypted_channels.append(decrypted)
+
+        entropy = calculate_entropy(encrypted)
+        mse = calculate_mse(channels[i],encrypted)
+        npcr = calculate_npcr(channels[i], encrypted)
+
+        print(f"    Entropy: {entropy:.5f}")
+        print(f"    MSE (after mod): {mse:.2f}")
+        print(f"    NPCR: {npcr:.2f}%")
+
+        plot_histogram(channels[i], f'Original Channel {i}')
+        plot_histogram(encrypted, f'Encrypted Channel {i}')
+
+    encrypted_img = np.stack(encrypted_channels, axis=2)
+    decrypted_img = np.stack(decrypted_channels, axis=2)
+
+    array_to_image(encrypted_img, shape, 'encrypted_rgb.png')
+    array_to_image(decrypted_img, shape, 'decrypted_rgb.png')
+    print("[+] Encrypted RGB image saved as 'encrypted_rgb.png'")
+    print("[+] Decrypted RGB image saved as 'decrypted_rgb.png'")
+
+if __name__ == '__main__':
+    main('first.png')
